@@ -99,7 +99,13 @@ def main(argv=None):
     parser.add_argument('--fixture', type=Path, help='Read a local JSON record without network or credentials')
     parser.add_argument('--last-good', action='store_true', help='Request the last complete logged record')
     parser.add_argument('--version', action='version', version=__version__)
+    parser.add_argument('--serve', action='store_true', help='Open the local browser workspace server')
+    parser.add_argument('--port', type=int, default=8768, help='Loopback web server port')
     args = parser.parse_args(argv)
+    if args.serve:
+        from .server import serve
+        serve(args.port)
+        return 0
     try:
         if args.fixture:
             with args.fixture.open('rb') as handle:

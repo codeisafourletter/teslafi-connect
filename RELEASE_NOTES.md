@@ -1,13 +1,14 @@
-# 1.0.0-rc.1
+# 1.0.0-rc.2 — driving and charging workspace
 
-First functional candidate from an empty placeholder: a read-only, dependency-free logged-status client with an offline fixture mode. This provides a useful automation building block without introducing control permissions, paid infrastructure, or an account-management UI.
+The candidate expands from a status utility into a complete reporting journey:
 
-- Current and last-complete feed requests with environment-only token loading.
-- Safe allowlisted JSON summary, explicit logged-data freshness limitation, token-safe errors, redirect rejection, response-size limit, request timeout, and no retries.
-- Synthetic examples and Python 3.10/3.13 tests/CI.
+- Local CSV/JSON history import with explicit mapping, single-activity export support, distance/currency/offset choices, and optional tariff.
+- Date/activity filters, daily charts, known-vs-missing totals, equal-period distance comparisons, row-cited observations, and exportable report evidence.
+- Responsive browser UI, clear memory-only storage policy, labeled synthetic demo, and separate current/last-good status panel using a loopback backend.
+- Model regressions and full browser workflows at390/768/1440 px; status requests mocked, no private accounts accessed.
 
-No existing API or data migration. Run from the source checkout; no package has been published. The earlier placeholder remains the stable branch until this candidate is accepted.
+The read-only CLI remains compatible. No stable merge, package publication, deployment, vehicle control, or data migration. The history mapper accepts the documented normalized fields rather than claiming an undocumented universal TeslaFi export schema.
 
-## Acceptance before 1.0.0
+## Acceptance before1.0.0
 
-CI must pass on both Python versions. An owner should verify one current-feed and one last-good request against their own account locally, checking expected field names and timestamp interpretation. **No live account has been tested for this candidate.** If a real response shape differs, add a redacted fixture before claiming support. Drive/charge history, charts, vehicle commands, and account configuration remain outside this candidate.
+All Python/model/browser CI must pass. An owner should validate one real export's columns, units, timestamp offsets and totals locally, and separately validate current/last-good feed shape. Unknowns and tariff estimates must remain labeled. Real-account historical fetching, mixed-unit inference, predictive/causal analysis and vehicle commands are outside this candidate.

@@ -1,21 +1,374 @@
-import {parseHistory,normalize,totals} from './model.js';
-const $=id=>document.getElementById(id);let raw=[],records=[],issues=[],source={},options={},mapping={};
-const demo=`type,start,distance,energy,cost\ndrive,2025-01-01T08:00:00Z,26,,\ncharge,2025-01-01T18:00:00Z,,18,4.50\ndrive,2025-01-02T08:15:00Z,30,,\ndrive,2025-01-03T09:00:00Z,92,,\ncharge,2025-01-03T20:00:00Z,,38,12.16\ndrive,2025-01-04T10:00:00Z,18,,\ncharge,2025-01-04T21:00:00Z,,12,\ndrive,2025-01-05T08:00:00Z,55,,\ncharge,2025-01-05T19:30:00Z,,26,6.50\ndrive,2025-01-06T08:00:00Z,35,,\ncharge,2025-01-06T22:00:00Z,,20,5.00\ndrive,2025-01-07T09:00:00Z,42,,`;
-function el(tag,text,cls){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
-function fmt(n){return n===null?'Unknown':new Intl.NumberFormat('en',{maximumFractionDigits:2}).format(n)}
-async function prepare(text,name,demoMode,originalBytes){raw=parseHistory(text,name);if(raw.length>100000)throw Error('Limit history to 100,000 records per report.');source={filename:name,demo:demoMode,sha256:crypto.subtle?Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',originalBytes||new TextEncoder().encode(text)))).map(b=>b.toString(16).padStart(2,'0')).join(''):null};const headers=[...new Set(raw.flatMap(r=>Object.keys(r)))];$('map-fields').replaceChildren();for(const [key,label,guess] of [['kind','Activity type','type'],['start','Start timestamp','start'],['distance','Trip distance','distance'],['energy','Charge energy · kWh','energy'],['cost','Recorded charge cost','cost']]){const l=el('label',label);const s=document.createElement('select');s.id='map-'+key;s.append(new Option(key==='kind'||key==='start'?'Choose column':'Not available',''));if(key==='kind'){s.append(new Option('All rows are drives','constant:drive'),new Option('All rows are charges','constant:charge'))}headers.forEach(h=>s.append(new Option(h,h)));s.value=headers.find(h=>h.toLowerCase()===guess)||'';l.append(s);$('map-fields').append(l)}$('import-name').textContent=`${demoMode?'SYNTHETIC DEMO · ':''}${name} · ${raw.length} source records. Required: activity type and start timestamp.`;$('mapping').hidden=false;$('workspace').hidden=true;$('notice').textContent=demoMode?'Fictional demo history. Confirm the columns to explore the report.':'Your export is in this tab only. Confirm column meanings, units, and assumptions before analysis.';}
-$('file').onchange=async()=>{try{const f=$('file').files[0];if(!f)return;if(f.size>20*1024*1024)throw Error('History exceeds the 20 MiB browser limit.');await prepare(await f.text(),f.name,false,await f.arrayBuffer())}catch(e){$('notice').textContent=e.message}finally{$('file').value=''}};$('demo').onclick=()=>prepare(demo,'synthetic-driving-history.csv',true).catch(e=>$('notice').textContent=e.message);
-$('analyze').onclick=()=>{try{const nextMapping=Object.fromEntries(['kind','start','distance','energy','cost'].map(k=>[k,$('map-'+k).value]));if(!nextMapping.kind||!nextMapping.start)throw Error('Choose the activity type and timestamp columns.');const used=Object.values(nextMapping).filter(v=>v&&!v.startsWith('constant:'));if(new Set(used).size!==used.length)throw Error('Map each source column to only one field.');const nextOptions={unit:$('unit').value,currency:$('currency').value,offset:$('offset').value,tariff:$('tariff').value};const nextResult=normalize(raw,nextMapping,nextOptions);if(!nextResult.records.length)throw Error('No usable records. Types must be drive/trip or charge; dates must be ISO-style. Check your mapping.');mapping=nextMapping;options=nextOptions;records=nextResult.records;issues=nextResult.issues;$('source').textContent=(source.demo?'SYNTHETIC DEMO · ':'')+source.filename;$('source-meta').textContent=`${records.length} usable records · distance ${options.unit}, energy kWh, currency ${options.currency} · unzoned dates ${options.offset} · SHA-256 ${source.sha256?.slice(0,16)||'unavailable'}…`;$('from').value='';$('to').value='';$('kind').value='all';$('workspace').hidden=false;$('notice').textContent=`Report ready. ${issues.length} skipped records; missing amounts remain unknown. ${source.demo?'Synthetic demo data only.':''}`;render()}catch(e){$('notice').textContent=e.message}};
-function visible(){return records.filter(r=>(!$('from').value||r.start.slice(0,10)>=$('from').value)&&(!$('to').value||r.start.slice(0,10)<=$('to').value)&&($('kind').value==='all'||r.kind===$('kind').value));}
-function render(){const rows=visible();const t=totals(rows);$('stats').replaceChildren(...[[t.drives,'Drives'],[fmt(t.distance.value)+' '+options.unit,`Distance · ${t.distance.known}/${t.distance.total} known`],[fmt(t.energy.value)+' kWh',`Charging energy · ${t.energy.known}/${t.energy.total} known`],[fmt(t.cost.value)+' '+options.currency,`Charging cost · ${t.cost.known}/${t.cost.total} known; ${t.estimatedCosts} estimated`]].map(([v,label])=>{const e=el('div',undefined,'stat');e.append(el('b',v),el('span',label));return e}));
- const metric=$('metric').value,unit=metric==='distance'?options.unit:metric==='energy'?'kWh':options.currency;$('chart-title').textContent=({distance:'Distance driven',energy:'Charging energy',cost:'Charging cost'})[metric];const grouped=new Map();rows.forEach(r=>{const d=r.start.slice(0,10);if(!grouped.has(d))grouped.set(d,[]);if(r[metric]!==null)grouped.get(d).push(r[metric])});const days=[...grouped].sort(([a],[b])=>a.localeCompare(b)).map(([day,vals])=>({day,value:vals.length?vals.reduce((a,b)=>a+b,0):null}));const shownDays=days.slice(-60);const max=Math.max(1,...shownDays.map(d=>d.value||0));$('chart').replaceChildren();shownDays.forEach(d=>{const col=el('div',undefined,'bar-col');col.append(el('b',d.value===null?'—':fmt(d.value)));const bar=el('div',undefined,'bar');bar.style.height=(d.value===null?0:Math.max(2,d.value/max*130))+'px';bar.title=`${d.day}: ${fmt(d.value)} ${unit}`;col.append(bar,el('small',d.day.slice(5)));$('chart').append(col)});if(!days.length)$('chart').append(el('p','No matching records.'));$('chart-note').textContent=`${unit} · ${days.length>60?'Latest 60 imported days shown; narrow the date range for earlier days.':'Only imported days shown.'} Dashes mean no known value, not zero. Partial totals exclude missing amounts.`;
- $('rows').replaceChildren();rows.slice().sort((a,b)=>a.start.localeCompare(b.start)).slice(0,500).forEach(r=>{const tr=el('tr');tr.id='record-'+r.sourceRow;[r.sourceRow,r.start.slice(0,16).replace('T',' '),r.kind,fmt(r.distance),fmt(r.energy),fmt(r.cost),r.costSource].forEach(v=>tr.append(el('td',v)));$('rows').append(tr)});$('issues').textContent=(rows.length>500?`Showing the first 500 of ${rows.length} matching records; narrow filters to inspect later records. Export includes all matches. `:'')+(issues.length?`${issues.length} source records skipped. ${issues.slice(0,5).join(' ')}${issues.length>5?' Full diagnostics are included in export.':''}`:'No source records were skipped. Unknown amounts are preserved.');
- $('insights').replaceChildren();function insight(text,row){const p=el('div',text,'insight');if(row){const a=el('a',` View source record ${row.sourceRow} →`);a.href='#record-'+row.sourceRow;a.onclick=()=>{document.querySelectorAll('.source-row').forEach(e=>e.classList.remove('source-row'));$('record-'+row.sourceRow)?.classList.add('source-row')};p.append(a)}$('insights').append(p)}
- const topDrive=rows.filter(r=>r.distance!==null).sort((a,b)=>b.distance-a.distance)[0];if(topDrive)insight(`The longest imported drive in this view is ${fmt(topDrive.distance)} ${options.unit} on ${topDrive.start.slice(0,10)}.`,topDrive);const topCost=rows.filter(r=>r.cost!==null).sort((a,b)=>b.cost-a.cost)[0];if(topCost)insight(`The largest known charging cost is ${fmt(topCost.cost)} ${options.currency} (${topCost.costSource}). This identifies a record, not the reason for the cost.`,topCost);
- if($('from').value&&$('to').value){const a=Date.parse($('from').value+'T00:00:00Z'),b=Date.parse($('to').value+'T00:00:00Z')+86400000,duration=b-a;const prev=records.filter(r=>Date.parse(r.start)>=a-duration&&Date.parse(r.start)<a&&($('kind').value==='all'||r.kind===$('kind').value));const pt=totals(prev);if(duration>0&&prev.length&&pt.distance.value!==null&&t.distance.value!==null)insight(`Known distance differs by ${fmt(t.distance.value-pt.distance.value)} ${options.unit} versus the previous ${Math.round(duration/86400000)} days (${t.distance.known} current and ${pt.distance.known} prior drive records with known distance). Missing exports can change this comparison; no cause is inferred.`);else insight('No comparable prior-period distance records are available for this range.');}else insight('Set both date boundaries to compare known driving distance with the preceding period of equal length.');if(t.cost.known<t.cost.total)insight(`${t.cost.total-t.cost.known} charging records have unknown cost. Add an explicit tariff during mapping to estimate missing values, or keep them unknown.`);
+import { parseHistory, normalize, totals } from "./model.js";
+const $ = (id) => document.getElementById(id);
+let raw = [],
+  records = [],
+  issues = [],
+  source = {},
+  options = {},
+  mapping = {};
+const demo = `type,start,distance,energy,cost\ndrive,2025-01-01T08:00:00Z,26,,\ncharge,2025-01-01T18:00:00Z,,18,4.50\ndrive,2025-01-02T08:15:00Z,30,,\ndrive,2025-01-03T09:00:00Z,92,,\ncharge,2025-01-03T20:00:00Z,,38,12.16\ndrive,2025-01-04T10:00:00Z,18,,\ncharge,2025-01-04T21:00:00Z,,12,\ndrive,2025-01-05T08:00:00Z,55,,\ncharge,2025-01-05T19:30:00Z,,26,6.50\ndrive,2025-01-06T08:00:00Z,35,,\ncharge,2025-01-06T22:00:00Z,,20,5.00\ndrive,2025-01-07T09:00:00Z,42,,`;
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
 }
-['from','to','kind','metric'].forEach(id=>$(id).oninput=render);$('clear').onclick=()=>{raw=[];records=[];issues=[];source={};mapping={};options={};$('workspace').hidden=true;$('mapping').hidden=true;['rows','map-fields','stats','chart','insights','source','source-meta','import-name','issues','status-values','status-message'].forEach(id=>$(id).replaceChildren());['from','to','tariff'].forEach(id=>$(id).value='');$('notice').textContent='Workspace cleared. Downloaded reports remain on your device.'};$('export').onclick=()=>{const report={format:'teslafi-connect-report/v1',source,assumptions:options,mapping,filter:{from:$('from').value,to:$('to').value,kind:$('kind').value},totals:totals(visible()),records:visible(),skipped:issues,generatedAt:new Date().toISOString()};const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='teslafi-driving-report.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
-async function status(lastGood){$('status-message').textContent='Reading logged status…';$('status-values').replaceChildren();try{const response=await fetch('/api/status'+(lastGood?'?last_good=1':''));const data=await response.json();if(!response.ok)throw Error(data.error||'Status unavailable.');Object.entries(data.values).forEach(([k,v])=>$('status-values').append(el('strong',`${k.replaceAll('_',' ')}: ${v}`)));$('status-message').textContent=`${data.source} · Recorded: ${data.recorded_at??'unknown'}. ${data.freshness}`}catch(e){$('status-message').textContent=e.message}}
-$('status').onclick=()=>status(false);$('last-good').onclick=()=>status(true);
+function fmt(n) {
+  return n === null
+    ? "Unknown"
+    : new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(n);
+}
+async function prepare(text, name, demoMode, originalBytes) {
+  raw = parseHistory(text, name);
+  if (raw.length > 100000)
+    throw Error("Limit history to 100,000 records per report.");
+  source = {
+    filename: name,
+    demo: demoMode,
+    sha256: crypto.subtle
+      ? Array.from(
+          new Uint8Array(
+            await crypto.subtle.digest(
+              "SHA-256",
+              originalBytes || new TextEncoder().encode(text),
+            ),
+          ),
+        )
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("")
+      : null,
+  };
+  const headers = [...new Set(raw.flatMap((r) => Object.keys(r)))];
+  $("map-fields").replaceChildren();
+  for (const [key, label, guess] of [
+    ["kind", "Activity type", "type"],
+    ["start", "Start timestamp", "start"],
+    ["distance", "Trip distance", "distance"],
+    ["energy", "Charge energy · kWh", "energy"],
+    ["cost", "Recorded charge cost", "cost"],
+  ]) {
+    const l = el("label", label);
+    const s = document.createElement("select");
+    s.id = "map-" + key;
+    s.append(
+      new Option(
+        key === "kind" || key === "start" ? "Choose column" : "Not available",
+        "",
+      ),
+    );
+    if (key === "kind") {
+      s.append(
+        new Option("All rows are drives", "constant:drive"),
+        new Option("All rows are charges", "constant:charge"),
+      );
+    }
+    headers.forEach((h) => s.append(new Option(h, h)));
+    s.value = headers.find((h) => h.toLowerCase() === guess) || "";
+    l.append(s);
+    $("map-fields").append(l);
+  }
+  $("import-name").textContent =
+    `${demoMode ? "SYNTHETIC DEMO · " : ""}${name} · ${raw.length} source records. Required: activity type and start timestamp.`;
+  $("mapping").hidden = false;
+  $("workspace").hidden = true;
+  $("notice").textContent = demoMode
+    ? "Fictional demo history. Confirm the columns to explore the report."
+    : "Your export is in this tab only. Confirm column meanings, units, and assumptions before analysis.";
+}
+$("file").onchange = async () => {
+  try {
+    const f = $("file").files[0];
+    if (!f) return;
+    if (f.size > 20 * 1024 * 1024)
+      throw Error("History exceeds the 20 MiB browser limit.");
+    await prepare(await f.text(), f.name, false, await f.arrayBuffer());
+  } catch (e) {
+    $("notice").textContent = e.message;
+  } finally {
+    $("file").value = "";
+  }
+};
+$("demo").onclick = () =>
+  prepare(demo, "synthetic-driving-history.csv", true).catch(
+    (e) => ($("notice").textContent = e.message),
+  );
+$("analyze").onclick = () => {
+  try {
+    const nextMapping = Object.fromEntries(
+      ["kind", "start", "distance", "energy", "cost"].map((k) => [
+        k,
+        $("map-" + k).value,
+      ]),
+    );
+    if (!nextMapping.kind || !nextMapping.start)
+      throw Error("Choose the activity type and timestamp columns.");
+    const used = Object.values(nextMapping).filter(
+      (v) => v && !v.startsWith("constant:"),
+    );
+    if (new Set(used).size !== used.length)
+      throw Error("Map each source column to only one field.");
+    const nextOptions = {
+      unit: $("unit").value,
+      currency: $("currency").value,
+      offset: $("offset").value,
+      tariff: $("tariff").value,
+    };
+    const nextResult = normalize(raw, nextMapping, nextOptions);
+    if (!nextResult.records.length)
+      throw Error(
+        "No usable records. Types must be drive/trip or charge; dates must be ISO-style. Check your mapping.",
+      );
+    mapping = nextMapping;
+    options = nextOptions;
+    records = nextResult.records;
+    issues = nextResult.issues;
+    $("source").textContent =
+      (source.demo ? "SYNTHETIC DEMO · " : "") + source.filename;
+    $("source-meta").textContent =
+      `${records.length} usable records · distance ${options.unit}, energy kWh, currency ${options.currency} · unzoned dates ${options.offset} · SHA-256 ${source.sha256?.slice(0, 16) || "unavailable"}…`;
+    $("from").value = "";
+    $("to").value = "";
+    $("kind").value = "all";
+    $("workspace").hidden = false;
+    $("notice").textContent =
+      `Report ready. ${issues.length} skipped records; missing amounts remain unknown. ${source.demo ? "Synthetic demo data only." : ""}`;
+    render();
+  } catch (e) {
+    $("notice").textContent = e.message;
+  }
+};
+function visible() {
+  return records.filter(
+    (r) =>
+      (!$("from").value || r.start.slice(0, 10) >= $("from").value) &&
+      (!$("to").value || r.start.slice(0, 10) <= $("to").value) &&
+      ($("kind").value === "all" || r.kind === $("kind").value),
+  );
+}
+function render() {
+  const rows = visible();
+  const t = totals(rows);
+  $("stats").replaceChildren(
+    ...[
+      [t.drives, "Drives"],
+      [
+        fmt(t.distance.value) + " " + options.unit,
+        `Distance · ${t.distance.known}/${t.distance.total} known`,
+      ],
+      [
+        fmt(t.energy.value) + " kWh",
+        `Charging energy · ${t.energy.known}/${t.energy.total} known`,
+      ],
+      [
+        fmt(t.cost.value) + " " + options.currency,
+        `Charging cost · ${t.cost.known}/${t.cost.total} known; ${t.estimatedCosts} estimated`,
+      ],
+    ].map(([v, label]) => {
+      const e = el("div", undefined, "stat");
+      e.append(el("b", v), el("span", label));
+      return e;
+    }),
+  );
+  const metric = $("metric").value,
+    unit =
+      metric === "distance"
+        ? options.unit
+        : metric === "energy"
+          ? "kWh"
+          : options.currency;
+  $("chart-title").textContent = {
+    distance: "Distance driven",
+    energy: "Charging energy",
+    cost: "Charging cost",
+  }[metric];
+  const grouped = new Map();
+  rows.forEach((r) => {
+    const d = r.start.slice(0, 10);
+    if (!grouped.has(d)) grouped.set(d, []);
+    if (r[metric] !== null) grouped.get(d).push(r[metric]);
+  });
+  const days = [...grouped]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, vals]) => ({
+      day,
+      value: vals.length ? vals.reduce((a, b) => a + b, 0) : null,
+    }));
+  const shownDays = days.slice(-60);
+  const max = Math.max(1, ...shownDays.map((d) => d.value || 0));
+  $("chart").replaceChildren();
+  shownDays.forEach((d) => {
+    const col = el("div", undefined, "bar-col");
+    col.append(el("b", d.value === null ? "—" : fmt(d.value)));
+    const bar = el("div", undefined, "bar");
+    bar.style.height =
+      (d.value === null ? 0 : Math.max(2, (d.value / max) * 130)) + "px";
+    bar.title = `${d.day}: ${fmt(d.value)} ${unit}`;
+    col.append(bar, el("small", d.day.slice(5)));
+    $("chart").append(col);
+  });
+  if (!days.length) $("chart").append(el("p", "No matching records."));
+  $("chart-note").textContent =
+    `${unit} · ${days.length > 60 ? "Latest 60 imported days shown; narrow the date range for earlier days." : "Only imported days shown."} Dashes mean no known value, not zero. Partial totals exclude missing amounts.`;
+  $("rows").replaceChildren();
+  rows
+    .slice()
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .slice(0, 500)
+    .forEach((r) => {
+      const tr = el("tr");
+      tr.id = "record-" + r.sourceRow;
+      [
+        r.sourceRow,
+        r.start.slice(0, 16).replace("T", " "),
+        r.kind,
+        fmt(r.distance),
+        fmt(r.energy),
+        fmt(r.cost),
+        r.costSource,
+      ].forEach((v) => tr.append(el("td", v)));
+      $("rows").append(tr);
+    });
+  $("issues").textContent =
+    (rows.length > 500
+      ? `Showing the first 500 of ${rows.length} matching records; narrow filters to inspect later records. Export includes all matches. `
+      : "") +
+    (issues.length
+      ? `${issues.length} source records skipped. ${issues.slice(0, 5).join(" ")}${issues.length > 5 ? " Full diagnostics are included in export." : ""}`
+      : "No source records were skipped. Unknown amounts are preserved.");
+  $("insights").replaceChildren();
+  function insight(text, row) {
+    const p = el("div", text, "insight");
+    if (row) {
+      const a = el("a", ` View source record ${row.sourceRow} →`);
+      a.href = "#record-" + row.sourceRow;
+      a.onclick = () => {
+        document
+          .querySelectorAll(".source-row")
+          .forEach((e) => e.classList.remove("source-row"));
+        $("record-" + row.sourceRow)?.classList.add("source-row");
+      };
+      p.append(a);
+    }
+    $("insights").append(p);
+  }
+  const topDrive = rows
+    .filter((r) => r.distance !== null)
+    .sort((a, b) => b.distance - a.distance)[0];
+  if (topDrive)
+    insight(
+      `The longest imported drive in this view is ${fmt(topDrive.distance)} ${options.unit} on ${topDrive.start.slice(0, 10)}.`,
+      topDrive,
+    );
+  const topCost = rows
+    .filter((r) => r.cost !== null)
+    .sort((a, b) => b.cost - a.cost)[0];
+  if (topCost)
+    insight(
+      `The largest known charging cost is ${fmt(topCost.cost)} ${options.currency} (${topCost.costSource}). This identifies a record, not the reason for the cost.`,
+      topCost,
+    );
+  if ($("from").value && $("to").value) {
+    const a = Date.parse($("from").value + "T00:00:00Z"),
+      b = Date.parse($("to").value + "T00:00:00Z") + 86400000,
+      duration = b - a;
+    const prev = records.filter(
+      (r) =>
+        Date.parse(r.start) >= a - duration &&
+        Date.parse(r.start) < a &&
+        ($("kind").value === "all" || r.kind === $("kind").value),
+    );
+    const pt = totals(prev);
+    if (
+      duration > 0 &&
+      prev.length &&
+      pt.distance.value !== null &&
+      t.distance.value !== null
+    )
+      insight(
+        `Known distance differs by ${fmt(t.distance.value - pt.distance.value)} ${options.unit} versus the previous ${Math.round(duration / 86400000)} days (${t.distance.known} current and ${pt.distance.known} prior drive records with known distance). Missing exports can change this comparison; no cause is inferred.`,
+      );
+    else
+      insight(
+        "No comparable prior-period distance records are available for this range.",
+      );
+  } else
+    insight(
+      "Set both date boundaries to compare known driving distance with the preceding period of equal length.",
+    );
+  if (t.cost.known < t.cost.total)
+    insight(
+      `${t.cost.total - t.cost.known} charging records have unknown cost. Add an explicit tariff during mapping to estimate missing values, or keep them unknown.`,
+    );
+}
+["from", "to", "kind", "metric"].forEach((id) => ($(id).oninput = render));
+$("clear").onclick = () => {
+  raw = [];
+  records = [];
+  issues = [];
+  source = {};
+  mapping = {};
+  options = {};
+  $("workspace").hidden = true;
+  $("mapping").hidden = true;
+  [
+    "rows",
+    "map-fields",
+    "stats",
+    "chart",
+    "insights",
+    "source",
+    "source-meta",
+    "import-name",
+    "issues",
+    "status-values",
+    "status-message",
+  ].forEach((id) => $(id).replaceChildren());
+  ["from", "to", "tariff"].forEach((id) => ($(id).value = ""));
+  $("notice").textContent =
+    "Workspace cleared. Downloaded reports remain on your device.";
+};
+$("export").onclick = () => {
+  const report = {
+    format: "teslafi-connect-report/v1",
+    source,
+    assumptions: options,
+    mapping,
+    filter: { from: $("from").value, to: $("to").value, kind: $("kind").value },
+    totals: totals(visible()),
+    records: visible(),
+    skipped: issues,
+    generatedAt: new Date().toISOString(),
+  };
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
+  );
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "teslafi-driving-report.json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+async function status(lastGood) {
+  $("status-message").textContent = "Reading logged status…";
+  $("status-values").replaceChildren();
+  try {
+    const response = await fetch(
+      "/api/status" + (lastGood ? "?last_good=1" : ""),
+    );
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error || "Status unavailable.");
+    Object.entries(data.values).forEach(([k, v]) =>
+      $("status-values").append(
+        el("strong", `${k.replaceAll("_", " ")}: ${v}`),
+      ),
+    );
+    $("status-message").textContent =
+      `${data.source} · Recorded: ${data.recorded_at ?? "unknown"}. ${data.freshness}`;
+  } catch (e) {
+    $("status-message").textContent = e.message;
+  }
+}
+$("status").onclick = () => status(false);
+$("last-good").onclick = () => status(true);
 
-$('choose-file').onclick=()=>$('file').click();
+$("choose-file").onclick = () => $("file").click();

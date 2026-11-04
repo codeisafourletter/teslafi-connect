@@ -39,7 +39,7 @@ class FeedTests(unittest.TestCase):
         self.assertTrue(opener.request.full_url.endswith('?command='))
 
     def test_missing_token_and_header_injection_rejected(self):
-        for token in (None, '', '  ', 'abc\r\ndef'):
+        for token in (None, '', '  ', 'abc\r\ndef', 'snowman-☃', 'token\x00', 'token\x7f'):
             with self.assertRaises(FeedError):
                 fetch_feed(token, opener=Opener())
 
@@ -60,6 +60,14 @@ class FeedTests(unittest.TestCase):
             with self.assertRaises(FeedError) as result:
                 decode_feed(payload)
             self.assertNotIn('secret', str(result.exception))
+
+    def test_empty_unknown_and_unavailable_shapes_fail(self):
+        for data in ({}, {'response': None}, {'message': 'Unauthorized'},
+                     {'state': None}, {'state': {}}, {'state': ''}, {'state': 123},
+                     {'battery_level': False}, {'battery_level': 'unknown'}, {'battery_level': 101}, {'battery_level': float('nan')}):
+            with self.subTest(data=data), self.assertRaises(FeedError):
+                decode_feed(json.dumps(data).encode())
+        self.assertEqual(decode_feed(b'{"battery_level":0}')['battery_level'], 0)
 
     def test_summary_omits_location_identity_and_nested_data(self):
         result = summarize({'vin': 'private', 'latitude': 20, 'state': {'secret': 1}, 'Date': '2025'}, 'test')

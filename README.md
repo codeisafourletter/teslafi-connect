@@ -12,7 +12,7 @@ From this repository's directory:
 python -m teslafi_connect --fixture examples/status.json
 ```
 
-The synthetic example prints the record date, battery level, charging state, and vehicle state. VIN, location and account names are excluded. Missing values remain absent. Values retain TeslaFi's types; no unit conversion is performed.
+The synthetic example prints the record date, battery level, charging state, and vehicle state. VIN, location and account names are excluded. Missing or invalid values remain absent. A record with no valid state, charging state, or 0–100 battery level fails instead of reporting an empty success. Values retain TeslaFi's types; no unit conversion is performed.
 
 ## Read your logged status
 

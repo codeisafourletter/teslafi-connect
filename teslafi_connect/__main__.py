@@ -1,6 +1,7 @@
 """Read only the logged TeslaFi feed; never send a vehicle control."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -22,6 +23,23 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise FeedError('Unexpected redirect; verify TeslaFi service availability.')
 
 
+def status_values(data):
+    values = {}
+    for key in ('state', 'charging_state'):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            values[key] = value
+    battery = data.get('battery_level')
+    if not isinstance(battery, bool):
+        try:
+            numeric = float(battery)
+            if math.isfinite(numeric) and 0 <= numeric <= 100:
+                values['battery_level'] = battery
+        except (ValueError, TypeError, OverflowError):
+            pass
+    return values
+
+
 def decode_feed(payload):
     if len(payload) > MAX_BYTES:
         raise FeedError('Feed exceeds the 2 MiB response limit.')
@@ -36,14 +54,17 @@ def decode_feed(payload):
     response = data.get('response')
     if isinstance(response, dict) and (response.get('result') is False or response.get('result') == 'unauthorized'):
         raise FeedError('TeslaFi denied this request. Check token access on the TeslaFi API page.')
+    valid_values = status_values(data)
+    if not valid_values:
+        raise FeedError('No recognized status fields in the feed. The record may be unavailable or incompatible; try --last-good.')
     return data
 
 
 def fetch_feed(token, last_good=False, opener=None):
     if not token or not token.strip():
         raise FeedError('Set TESLAFI_API_TOKEN locally before requesting the feed; do not paste it into chat.')
-    if '\r' in token or '\n' in token:
-        raise FeedError('TESLAFI_API_TOKEN must be a single line.')
+    if not token.isascii() or any(ord(char) < 32 or ord(char) == 127 for char in token):
+        raise FeedError('TESLAFI_API_TOKEN must contain printable ASCII characters only.')
     request = urllib.request.Request(
         ENDPOINT + ('?command=lastGood' if last_good else '?command='),
         headers={'Authorization': 'Bearer ' + token.strip(), 'Accept': 'application/json',
@@ -64,8 +85,7 @@ def fetch_feed(token, last_good=False, opener=None):
 
 def summarize(data, source):
     # A deliberately small allowlist avoids VIN, location, account names and raw responses.
-    values = {key: data[key] for key in ('state', 'battery_level', 'charging_state')
-              if key in data and isinstance(data[key], (str, int, float, bool, type(None)))}
+    values = status_values(data)
     recorded_at = data.get('Date', data.get('date'))
     if not isinstance(recorded_at, (str, int, float, type(None))):
         recorded_at = None

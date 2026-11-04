@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+private/
+
+node_modules/
+rc2-*.png

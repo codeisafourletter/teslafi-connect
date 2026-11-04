@@ -1,0 +1,173 @@
+export function parseCSV(text) {
+  const rows = [];
+  let row = [],
+    field = "",
+    quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      if (quoted && text[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (!field || quoted) quoted = !quoted;
+      else throw Error("Unexpected quote in CSV.");
+    } else if (c === "," && !quoted) {
+      row.push(field);
+      field = "";
+    } else if ((c === "\n" || c === "\r") && !quoted) {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      if (row.some((v) => v.trim())) rows.push(row);
+      row = [];
+      field = "";
+    } else field += c;
+  }
+  if (quoted) throw Error("CSV has an unclosed quote.");
+  row.push(field);
+  if (row.some((v) => v.trim())) rows.push(row);
+  if (rows.length < 2)
+    throw Error("Include a header and at least one data row.");
+  const headers = rows.shift().map((x) => x.trim().replace(/^\uFEFF/, ""));
+  if (headers.some((h) => !h) || new Set(headers).size !== headers.length)
+    throw Error("Column names must be unique and nonempty.");
+  return rows.map((r, i) => {
+    if (r.length !== headers.length)
+      throw Error(
+        `CSV row ${i + 2} has ${r.length} fields; expected ${headers.length}.`,
+      );
+    return Object.fromEntries(headers.map((h, j) => [h, r[j]]));
+  });
+}
+export function parseHistory(text, filename) {
+  let rows;
+  if (filename.toLowerCase().endsWith(".json")) {
+    rows = JSON.parse(text);
+    if (
+      !Array.isArray(rows) ||
+      !rows.length ||
+      rows.some((r) => !r || Array.isArray(r) || typeof r !== "object")
+    )
+      throw Error("JSON must be a nonempty array of flat record objects.");
+    if (
+      rows.some((r) =>
+        Object.values(r).some((v) => v !== null && typeof v === "object"),
+      )
+    )
+      throw Error("Nested JSON is not supported; export flat records.");
+  } else rows = parseCSV(text);
+  return rows;
+}
+function number(value) {
+  if (typeof value === "boolean") return null;
+  if (value === null || value === undefined || String(value).trim() === "")
+    return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+export function timestamp(value, offset) {
+  if (value === null || value === undefined) return null;
+  let s = String(value).trim().replace(" ", "T");
+  if (
+    !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.test(
+      s,
+    )
+  )
+    return null;
+  const [year, month, day] = s.slice(0, 10).split("-").map(Number);
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > new Date(Date.UTC(year, month, 0)).getUTCDate()
+  )
+    return null;
+  if (s.length === 10) s += "T00:00:00";
+  if (!/(Z|[+-]\d{2}:\d{2})$/.test(s)) s += offset;
+  const n = Date.parse(s);
+  return Number.isFinite(n) ? new Date(n).toISOString() : null;
+}
+export function normalize(raw, map, options) {
+  if (
+    !/^[+-](0\d|1[0-4]):[0-5]\d$/.test(options.offset) ||
+    (/^[-+]14:/.test(options.offset) && !options.offset.endsWith(":00"))
+  )
+    throw Error(
+      "Use a fixed UTC offset such as +00:00 or -06:00 (maximum 14 hours).",
+    );
+  const tariff = number(options.tariff);
+  if (options.tariff !== "" && tariff === null)
+    throw Error("Tariff must be blank or a nonnegative number.");
+  let issues = [];
+  let records = [];
+  raw.forEach((r, i) => {
+    const sourceRow = i + 1;
+    const t = timestamp(r[map.start], options.offset);
+    const kind = String(
+      map.kind?.startsWith("constant:")
+        ? map.kind.slice(9)
+        : (r[map.kind] ?? ""),
+    )
+      .trim()
+      .toLowerCase();
+    const activity = /^(drive|trip|driving)$/.test(kind)
+      ? "drive"
+      : /^(charge|charging|charge session)$/.test(kind)
+        ? "charge"
+        : null;
+    if (!t || !activity) {
+      issues.push(
+        `Record ${sourceRow}: skipped (${!t ? "unsupported/missing timestamp" : "unrecognized activity type"}).`,
+      );
+      return;
+    }
+    const distance = number(r[map.distance]),
+      energy = number(r[map.energy]),
+      recorded = number(r[map.cost]);
+    const estimated =
+      activity === "charge" &&
+      recorded === null &&
+      energy !== null &&
+      tariff !== null;
+    const cost =
+      activity === "charge"
+        ? (recorded ?? (estimated ? energy * tariff : null))
+        : null;
+    records.push({
+      sourceRow,
+      start: t,
+      kind: activity,
+      distance: activity === "drive" ? distance : null,
+      energy: activity === "charge" ? energy : null,
+      cost,
+      costSource:
+        recorded !== null && activity === "charge"
+          ? "recorded"
+          : estimated
+            ? "tariff estimate"
+            : "unknown",
+      raw: r,
+    });
+  });
+  return { records, issues };
+}
+export function totals(rows) {
+  const drives = rows.filter((r) => r.kind === "drive"),
+    charges = rows.filter((r) => r.kind === "charge");
+  const sum = (set, key) => {
+    const known = set.filter((r) => r[key] !== null);
+    return {
+      value: known.length ? known.reduce((n, r) => n + r[key], 0) : null,
+      known: known.length,
+      total: set.length,
+    };
+  };
+  return {
+    drives: drives.length,
+    charges: charges.length,
+    distance: sum(drives, "distance"),
+    energy: sum(charges, "energy"),
+    cost: sum(charges, "cost"),
+    estimatedCosts: charges.filter((r) => r.costSource === "tariff estimate")
+      .length,
+  };
+}

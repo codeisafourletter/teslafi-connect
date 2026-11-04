@@ -1,0 +1,13 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {parseCSV,parseHistory,normalize,totals,timestamp} from '../web/model.js';
+const map={kind:'type',start:'start',distance:'distance',energy:'energy',cost:'cost'};const opts={offset:'+00:00',tariff:'0.25'};
+test('quoted CSV and JSON import real source rows',()=>{assert.deepEqual(parseCSV('type,note\ncharge,"a,b"\n'),[{type:'charge',note:'a,b'}]);assert.throws(()=>parseCSV('x,x\na,b'));assert.throws(()=>parseCSV('x,y\na'));assert.throws(()=>parseHistory('[{"nested":{}}]','export.json'));});
+test('units and missing cost remain explicit',()=>{const {records,issues}=normalize([{type:'charge',start:'2025-01-01 12:00',energy:'20',cost:''},{type:'drive',start:'2025-01-02',distance:'30'}],map,opts);assert.equal(issues.length,0);assert.equal(records[0].cost,5);assert.equal(records[0].costSource,'tariff estimate');assert.equal(records[1].cost,null);assert.equal(totals(records).distance.value,30)});
+test('recorded cost wins; blank is unknown while zero is real',()=>{const r=normalize([{type:'charge',start:'2025-01-01',energy:'20',cost:'0'},{type:'charge',start:'2025-01-02',energy:'',cost:''}],map,opts).records;assert.equal(r[0].cost,0);assert.equal(r[0].costSource,'recorded');assert.equal(r[1].cost,null);assert.equal(totals(r).cost.known,1);assert.equal(totals([]).energy.value,null)});
+test('skip unsupported dates/types, preserve raw citation and offset',()=>{const raw=[{type:'drive',start:'2025-01-01 12:00:00',distance:'10'},{type:'boat',start:'yesterday'}];const result=normalize(raw,map,{...opts,offset:'-06:00'});assert.equal(result.records[0].start,'2025-01-01T18:00:00.000Z');assert.equal(result.records[0].raw,raw[0]);assert.equal(result.records[0].sourceRow,1);assert.equal(result.issues.length,1);assert.equal(timestamp('01/02/25','+00:00'),null)});
+test('invalid tariff and timezone rejected',()=>{assert.throws(()=>normalize([],map,{offset:'+14:30',tariff:''}));assert.throws(()=>normalize([],map,{offset:'+00:00',tariff:'-1'}))});
+
+test('invalid calendar dates are not rolled forward',()=>{assert.equal(timestamp('2025-02-30','+00:00'),null);assert.equal(timestamp('2025-13-01','+00:00'),null)});
+
+test('single-activity export need not invent a type column',()=>{const r=normalize([{start:'2025-01-01',distance:'12'}],{...map,kind:'constant:drive'},opts);assert.equal(r.records[0].kind,'drive');assert.equal(r.records[0].distance,12)});
+
+test('boolean metrics are unknown, not numeric amounts',()=>{const r=normalize([{type:'charge',start:'2025-01-01',energy:true,cost:false}],map,{offset:'+00:00',tariff:''}).records[0];assert.equal(r.energy,null);assert.equal(r.cost,null)});

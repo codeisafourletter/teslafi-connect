@@ -153,6 +153,18 @@ process.on("exit", () => server.kill());
           /mocked offline test/,
         );
       }
+      await p.evaluate(() => {
+        const digest = crypto.subtle.digest.bind(crypto.subtle);
+        crypto.subtle.digest = async (...args) => {
+          await new Promise(resolve => setTimeout(resolve, 300));
+          return digest(...args);
+        };
+      });
+      await p.click('#demo');
+      await p.click('#clear');
+      await p.waitForTimeout(400);
+      assert.equal(await p.locator('#workspace').isVisible(), false);
+      assert.match(await p.locator('#notice').innerText(), /Workspace cleared/);
       assert.deepEqual(errors, []);
       evidence.push({
         name,

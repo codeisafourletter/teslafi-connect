@@ -1,3 +1,4 @@
+let importSequence = 0;
 import { parseHistory, normalize, totals } from "./model.js";
 const $ = (id) => document.getElementById(id);
 let raw = [],
@@ -18,11 +19,18 @@ function fmt(n) {
     ? "Unknown"
     : new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(n);
 }
-async function prepare(text, name, demoMode, originalBytes) {
-  raw = parseHistory(text, name);
-  if (raw.length > 100000)
+async function prepare(
+  text,
+  name,
+  demoMode,
+  originalBytes,
+  sequence = ++importSequence,
+) {
+  if (sequence !== importSequence) return;
+  const nextRaw = parseHistory(text, name);
+  if (nextRaw.length > 100000)
     throw Error("Limit history to 100,000 records per report.");
-  source = {
+  const nextSource = {
     filename: name,
     demo: demoMode,
     sha256: crypto.subtle
@@ -38,6 +46,9 @@ async function prepare(text, name, demoMode, originalBytes) {
           .join("")
       : null,
   };
+  if (sequence !== importSequence) return;
+  raw = nextRaw;
+  source = nextSource;
   const headers = [...new Set(raw.flatMap((r) => Object.keys(r)))];
   $("map-fields").replaceChildren();
   for (const [key, label, guess] of [
@@ -81,7 +92,14 @@ $("file").onchange = async () => {
     if (!f) return;
     if (f.size > 20 * 1024 * 1024)
       throw Error("History exceeds the 20 MiB browser limit.");
-    await prepare(await f.text(), f.name, false, await f.arrayBuffer());
+    const sequence = ++importSequence;
+    await prepare(
+      await f.text(),
+      f.name,
+      false,
+      await f.arrayBuffer(),
+      sequence,
+    );
   } catch (e) {
     $("notice").textContent = e.message;
   } finally {
@@ -302,6 +320,7 @@ function render() {
 }
 ["from", "to", "kind", "metric"].forEach((id) => ($(id).oninput = render));
 $("clear").onclick = () => {
+  importSequence++;
   raw = [];
   records = [];
   issues = [];

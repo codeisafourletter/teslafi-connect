@@ -1,0 +1,9 @@
+{
+  "Date": "2025-01-01 12:00:00",
+  "state": "asleep",
+  "battery_level": "72",
+  "charging_state": "Disconnected",
+  "vin": "SYNTHETIC-NOT-A-REAL-VIN",
+  "latitude": 12.34,
+  "longitude": 56.78
+}
